@@ -199,10 +199,15 @@ public:
 };
 
 public:
+  void (*callback)(int);
+  void setCallback(void (*cb)(int)) {
+    this->callback = cb;
+  }
 
   TinyGsmSim800(Stream& stream)
     : stream(stream)
   {
+    callback = 0;
     memset(sockets, 0, sizeof(sockets));
   }
 
@@ -236,10 +241,12 @@ public:
     for (unsigned long start = millis(); millis() - start < timeout; ) {
       sendAT(GF(""));
       if (waitResponse(200) == 1) {
-          delay(100);
+          if(callback) callback(100);
+          else delay(100);
           return true;
       }
-      delay(100);
+      if(callback) callback(100);
+      else delay(100);
     }
     return false;
   }
@@ -308,7 +315,8 @@ public:
     if (waitResponse(10000L) != 1) {
       return false;
     }
-    delay(3000);
+    if(callback) callback(3000);
+    else delay(3000);
     return init();
   }
 
@@ -322,7 +330,8 @@ public:
     if (waitResponse(10000L) != 1) {
       return false;
     }
-    delay(3000);
+    if(callback) callback(3000);
+    else delay(3000);
     return true;
   }
 
@@ -371,7 +380,8 @@ public:
     for (unsigned long start = millis(); millis() - start < timeout; ) {
       sendAT(GF("+CPIN?"));
       if (waitResponse(GF(GSM_NL "+CPIN:")) != 1) {
-        delay(1000);
+        if(callback) callback(1000);
+        else delay(1000);
         continue;
       }
       int status = waitResponse(GF("READY"), GF("SIM PIN"), GF("SIM PUK"), GF("NOT INSERTED"));
@@ -432,7 +442,8 @@ public:
       if (isNetworkConnected()) {
         return true;
       }
-      delay(250);
+      if(callback) callback(250);
+      else delay(250);
     }
     return false;
   }
@@ -471,6 +482,7 @@ public:
     sendAT(GF("+SAPBR=1,1"));
     waitResponse(85000L);
     // Query the GPRS bearer context status
+
     sendAT(GF("+SAPBR=2,1"));
     if (waitResponse(30000L) != 1)
       return false;
@@ -869,7 +881,8 @@ public:
     int index = 0;
     unsigned long startMillis = millis();
     do {
-      TINY_GSM_YIELD();
+      if(callback) callback(10);
+      else TINY_GSM_YIELD();
       while (stream.available() > 0) {
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
