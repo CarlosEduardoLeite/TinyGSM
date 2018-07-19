@@ -204,10 +204,16 @@ public:
     this->callback = cb;
   }
 
+  void (*debugCallback)(String err);
+  void setDebugCallback(void (*cb)(String msg)) {
+    this->debugCallback = cb;
+  }
+
   TinyGsmSim800(Stream& stream)
     : stream(stream)
   {
     callback = 0;
+    debugCallback = 0;
     memset(sockets, 0, sizeof(sockets));
   }
 
@@ -307,6 +313,7 @@ public:
     if (!testAT()) {
       return false;
     }
+
     sendAT(GF("+CFUN=0"));
     if (waitResponse(10000L) != 1) {
       return false;
@@ -315,6 +322,7 @@ public:
     if (waitResponse(10000L) != 1) {
       return false;
     }
+
     if(callback) callback(3000);
     else delay(3000);
     return init();
@@ -417,6 +425,45 @@ public:
     waitResponse();
     return res;
   }
+
+  /*
+   * Clock function
+   */
+  String getCCLK() {
+    sendAT(GF("+CCLK?"));
+    if (waitResponse(GF(GSM_NL "+CCLK:")) != 1) {
+      return "";
+    }
+    streamSkipUntil('"'); // Skip mode and format
+    String res = stream.readStringUntil('"');
+    waitResponse();
+    return res;
+  }
+
+  bool updateClock() {
+    sendAT(GF("E0"));   // Echo Off
+    if (waitResponse() != 1) {
+      return false;
+    }
+    sendAT(GF("+CFUN=0"));
+    if (waitResponse(10000L) != 1) {
+      return false;
+    }
+    sendAT(GF("+CLTS=1"));
+    if (waitResponse(10000L) != 1) {
+      return false;
+    }
+    sendAT(GF("+CFUN=1"));
+    if (waitResponse(15000L, "*PSUTTZ:") != 1) {
+      return false;
+    }
+
+    if(callback) callback(3000);
+    else delay(3000);
+
+    return true;
+  }
+
 
   /*
    * Generic network functions
@@ -756,6 +803,12 @@ protected:
     if (ssl && rsp != 1) {
       return false;
     }
+    if(ssl) {
+      sendAT(GF("+SSLOPT=0,1"));
+      waitResponse();
+      sendAT(GF("+SSLOPT=1,0"));
+      waitResponse();
+    }
     sendAT(GF("+CIPSTART="), mux, ',', GF("\"TCP"), GF("\",\""), host, GF("\","), port);
     rsp = waitResponse(75000L,
                        GF("CONNECT OK" GSM_NL),
@@ -840,11 +893,13 @@ public:
 
   template<typename T>
   void streamWrite(T last) {
+    if(debugCallback) debugCallback(String(last));
     stream.print(last);
   }
 
   template<typename T, typename... Args>
   void streamWrite(T head, Args... tail) {
+    if(debugCallback) debugCallback(String(head));
     stream.print(head);
     streamWrite(tail...);
   }
@@ -887,6 +942,11 @@ public:
         int a = stream.read();
         if (a <= 0) continue; // Skip 0x00 bytes, just in case
         data += (char)a;
+        if(debugCallback) {
+          String chr = "";
+          chr += (char)a;
+          debugCallback(chr);
+        }
         if (r1 && data.endsWith(r1)) {
           index = 1;
           goto finish;
