@@ -199,8 +199,8 @@ public:
 };
 
 public:
-  void (*callback)(int);
-  void setCallback(void (*cb)(int)) {
+  void (*callback)(unsigned long);
+  void setCallback(void (*cb)(unsigned long)) {
     this->callback = cb;
   }
 
@@ -806,8 +806,8 @@ protected:
     if(ssl) {
       sendAT(GF("+SSLOPT=0,1"));
       waitResponse();
-      sendAT(GF("+SSLOPT=1,0"));
-      waitResponse();
+//      sendAT(GF("+SSLOPT=1,0"));
+//      waitResponse();
     }
     sendAT(GF("+CIPSTART="), mux, ',', GF("\"TCP"), GF("\",\""), host, GF("\","), port);
     rsp = waitResponse(75000L,
