@@ -498,7 +498,7 @@ public:
   /*
    * GPRS functions
    */
-  bool gprsConnect(const char* apn, const char* user, const char* pwd) {
+  bool gprsConnect(const char* apn, const char* user, const char* pwd, String dns1="8.8.8.8", String dns2="8.8.4.4") {
     gprsDisconnect();
 
     // Set the Bearer for the IP
@@ -578,7 +578,7 @@ public:
     }
 
     // Configure Domain Name Server (DNS)
-    sendAT(GF("+CDNSCFG=\"8.8.8.8\",\"8.8.4.4\""));
+    sendAT(GF("+CDNSCFG=\"" + dns1 + "\",\"" + dns2 + "\""));
     if (waitResponse() != 1) {
       return false;
     }
