@@ -39,24 +39,37 @@ enum RegStatus {
 };
 
 
-class TinyGsm
+//============================================================================//
+//============================================================================//
+//                    Declaration of the TinyGsmM590 Class
+//============================================================================//
+//============================================================================//
+
+class TinyGsmM590
 {
+
+//============================================================================//
+//============================================================================//
+//                          The M590 Internal Client Class
+//============================================================================//
+//============================================================================//
+
 
 public:
 
 class GsmClient : public Client
 {
-  friend class TinyGsm;
+  friend class TinyGsmM590;
   typedef TinyGsmFifo<uint8_t, TINY_GSM_RX_BUFFER> RxFifo;
 
 public:
   GsmClient() {}
 
-  GsmClient(TinyGsm& modem, uint8_t mux = 1) {
+  GsmClient(TinyGsmM590& modem, uint8_t mux = 1) {
     init(&modem, mux);
   }
 
-  bool init(TinyGsm* modem, uint8_t mux = 1) {
+  bool init(TinyGsmM590* modem, uint8_t mux = 1) {
     this->at = modem;
     this->mux = mux;
     sock_connected = false;
@@ -68,6 +81,7 @@ public:
 
 public:
   virtual int connect(const char *host, uint16_t port) {
+    stop();
     TINY_GSM_YIELD();
     rx.clear();
     sock_connected = at->modemConnect(host, port, mux);
@@ -91,6 +105,7 @@ public:
     at->sendAT(GF("+TCPCLOSE="), mux);
     sock_connected = false;
     at->waitResponse();
+    rx.clear();
   }
 
   virtual size_t write(const uint8_t *buf, size_t size) {
@@ -101,6 +116,11 @@ public:
 
   virtual size_t write(uint8_t c) {
     return write(&c, 1);
+  }
+
+  virtual size_t write(const char *str) {
+    if (str == NULL) return 0;
+    return write((const uint8_t *)str, strlen(str));
   }
 
   virtual int available() {
@@ -157,15 +177,33 @@ public:
   String remoteIP() TINY_GSM_ATTR_NOT_IMPLEMENTED;
 
 private:
-  TinyGsm*      at;
+  TinyGsmM590*  at;
   uint8_t       mux;
   bool          sock_connected;
   RxFifo        rx;
 };
 
+//============================================================================//
+//============================================================================//
+//                          The M590 Has no Secure client!
+//============================================================================//
+//============================================================================//
+
+
+
+//============================================================================//
+//============================================================================//
+//                          The M590 Modem Functions
+//============================================================================//
+//============================================================================//
+
 public:
 
-  TinyGsm(Stream& stream)
+#ifdef GSM_DEFAULT_STREAM
+  TinyGsmM590(Stream& stream = GSM_DEFAULT_STREAM)
+#else
+  TinyGsmM590(Stream& stream)
+#endif
     : stream(stream)
   {
     memset(sockets, 0, sizeof(sockets));
@@ -203,8 +241,8 @@ public:
     for (unsigned long start = millis(); millis() - start < timeout; ) {
       sendAT(GF(""));
       if (waitResponse(200) == 1) {
-          delay(100);
-          return true;
+        delay(100);
+        return true;
       }
       delay(100);
     }
@@ -240,6 +278,10 @@ public:
     res.replace(GSM_NL, " ");
     res.trim();
     return res;
+  }
+
+  bool hasSSL() {
+    return false;
   }
 
   /*
@@ -312,10 +354,10 @@ public:
       int status = waitResponse(GF("READY"), GF("SIM PIN"), GF("SIM PUK"));
       waitResponse();
       switch (status) {
-      case 2:
-      case 3:  return SIM_LOCKED;
-      case 1:  return SIM_READY;
-      default: return SIM_ERROR;
+        case 2:
+        case 3:  return SIM_LOCKED;
+        case 1:  return SIM_READY;
+        default: return SIM_ERROR;
       }
     }
     return SIM_ERROR;
@@ -373,9 +415,13 @@ public:
   }
 
   /*
+   * WiFi functions
+   */
+
+  /*
    * GPRS functions
    */
-  bool gprsConnect(const char* apn, const char* user, const char* pwd) {
+  bool gprsConnect(const char* apn, const char* user = NULL, const char* pwd = NULL) {
     gprsDisconnect();
 
     sendAT(GF("+XISP=0"));
@@ -402,12 +448,12 @@ public:
     }
     return false;
 
-set_dns:
-    sendAT(GF("+DNSSERVER=1,8.8.8.8"));
-    waitResponse();
-
-    sendAT(GF("+DNSSERVER=2,8.8.4.4"));
-    waitResponse();
+// set_dns:  // TODO
+//     sendAT(GF("+DNSSERVER=1,8.8.8.8"));
+//     waitResponse();
+//
+//     sendAT(GF("+DNSSERVER=2,8.8.4.4"));
+//     waitResponse();
 
     return true;
   }
@@ -589,9 +635,13 @@ public:
     streamWrite(tail...);
   }
 
-  bool streamSkipUntil(char c) { //TODO: timeout
-    while (true) {
-      while (!stream.available()) { TINY_GSM_YIELD(); }
+  bool streamSkipUntil(char c) {
+    const unsigned long timeout = 1000L;
+    unsigned long startMillis = millis();
+    while (millis() - startMillis < timeout) {
+      while (millis() - startMillis < timeout && !stream.available()) {
+        TINY_GSM_YIELD();
+      }
       if (stream.read() == c)
         return true;
     }
@@ -677,6 +727,7 @@ finish:
       }
       data = "";
     }
+    //DBG('<', index, '>');
     return index;
   }
 
@@ -694,8 +745,10 @@ finish:
     return waitResponse(1000, r1, r2, r3, r4, r5);
   }
 
-protected:
+public:
   Stream&       stream;
+
+protected:
   GsmClient*    sockets[TINY_GSM_MUX_COUNT];
 };
 
