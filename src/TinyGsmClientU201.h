@@ -147,9 +147,9 @@ public:
   virtual void flush() { at->stream.flush(); }
 
   virtual uint8_t connected() {
-    if (available()) {
-      return true;
-    }
+//    if (available()) {
+//      return true;
+//    }
     return sock_connected;
   }
   virtual operator bool() { return connected(); }
@@ -189,6 +189,14 @@ public:
 };
 
 public:
+  void (*callback)(unsigned long);
+  void setCallback(void (*cb)(unsigned long)) {
+    this->callback = cb;
+  }
+  void (*debugCallback)(String err);
+  void setDebugCallback(void (*cb)(String msg)) {
+    this->debugCallback = cb;
+  }
 
 #ifdef GSM_DEFAULT_STREAM
   TinyGsmU201(Stream& stream = GSM_DEFAULT_STREAM)
@@ -197,6 +205,8 @@ public:
 #endif
     : stream(stream)
   {
+    callback = 0;
+    debugCallback = 0;
     memset(sockets, 0, sizeof(sockets));
   }
 
@@ -217,8 +227,22 @@ public:
     }
     int ret = getSimStatus();
     if (ret != SIM_READY && pin != NULL && strlen(pin) > 0) {
-      simUnlock(pin);
+      if(simUnlock(pin)) {
+        ret = SIM_READY;
+      }
     }
+    if (ret != SIM_READY) {
+      return false;
+    }
+
+    sendAT(GF("+CGATT=1"));
+    if (waitResponse(60000L) != 1) {
+      return false;
+    }
+//    sendAT(GF("+COPS=0"));
+//    if (waitResponse(60000L) != 1) {
+//      return false;
+//    }
     return (getSimStatus() == SIM_READY);
   }
 
@@ -230,10 +254,12 @@ public:
     for (unsigned long start = millis(); millis() - start < timeout; ) {
       sendAT(GF(""));
       if (waitResponse(200) == 1) {
-          delay(100);
+          if(callback) callback(100);
+          else delay(100);
           return true;
       }
-      delay(100);
+      if(callback) callback(100);
+      else delay(100);
     }
     return false;
   }
@@ -270,9 +296,61 @@ public:
     if (waitResponse(10000L) != 1) {
       return false;
     }
-    delay(3000);
+
+    if(callback) callback(6000);
+    else delay(6000);
     return init();
   }
+
+  bool restart2() {
+    sendAT(GF("E0"));
+    waitResponse(10000L);
+
+    sendAT(GF("+CFUN=16"));
+    waitResponse(10000L);
+
+    if(callback) callback(3000);
+    else delay(3000);
+
+    sendAT(GF("E0"));
+    waitResponse(10000L);
+
+    int ret = getSimStatus();
+    waitResponse(10000L);
+
+    sendAT(GF("+CGATT=1"));
+    waitResponse(60000L);
+
+    sendAT(GF("+CGREG?"));
+    waitResponse(60000L);
+
+    sendAT(GF("+COPS?"));
+    waitResponse(10000L);
+
+    sendAT(GF("+UPSD=0,1,\""), "java.claro.com.br", '"');
+    waitResponse(10000L);
+
+    sendAT(GF("+UPSD=0,2,\""), "claro", '"');
+    waitResponse(10000L);
+
+    sendAT(GF("+UPSD=0,3,\""), "claro", '"');
+    waitResponse(10000L);
+
+    sendAT(GF("+UPSD=0,7,\"0.0.0.0\"")); // Dynamic IP
+    waitResponse(10000L);
+
+    sendAT(GF("+UPSDA=0,3"));
+    waitResponse(60000L);
+
+    sendAT(GF("+UPSND=0,8"));
+    waitResponse(10000L);
+
+    sendAT(GF("+UPSND=0,0"));
+    waitResponse(60000L);
+
+    return false;
+  }
+
 
   bool poweroff() TINY_GSM_ATTR_NOT_IMPLEMENTED;
 
@@ -311,7 +389,8 @@ public:
     for (unsigned long start = millis(); millis() - start < timeout; ) {
       sendAT(GF("+CPIN?"));
       if (waitResponse(GF(GSM_NL "+CPIN:")) != 1) {
-        delay(1000);
+        if(callback) callback(1000);
+        else delay(1000);
         continue;
       }
       int status = waitResponse(GF("READY"), GF("SIM PIN"), GF("SIM PUK"), GF("NOT INSERTED"));
@@ -349,6 +428,24 @@ public:
   }
 
   /*
+   * Clock function
+   */
+  String getCCLK() {
+    sendAT(GF("+CCLK?"));
+    if (waitResponse(2000L, GF(GSM_NL "+CCLK: \"")) != 1) {
+      return "";
+    }
+
+    String res = stream.readStringUntil('"');
+    return res;
+  }
+
+  bool updateClock() {
+    return true;
+  }
+
+
+  /*
    * Generic network functions
    */
 
@@ -372,19 +469,26 @@ public:
       if (isNetworkConnected()) {
         return true;
       }
-      delay(250);
+      if(callback) callback(250);
+      else delay(250);
     }
+
+    sendAT(GF("+CGATT=1"));
+    if (waitResponse(60000L) != 1) {
+      return false;
+    }
+
     return false;
   }
 
   /*
    * GPRS functions
    */
-  bool gprsConnect(const char* apn, const char* user, const char* pwd) {
+  bool gprsConnect(const char* apn, const char* user, const char* pwd, String dns1="8.8.8.8", String dns2="8.8.4.4") {
     gprsDisconnect();
 
-    sendAT(GF("+CGATT=1"));
-    waitResponse(5000L);
+//    sendAT(GF("+CGATT=1"));
+//    waitResponse(5000L);
 
     sendAT(GF("+UPSD=0,1,\""), apn, '"');
     waitResponse();
@@ -402,13 +506,17 @@ public:
     waitResponse();
 
     sendAT(GF("+UPSDA=0,3"));
-    waitResponse(6000L);
+    if (waitResponse(60000L) != 1)
+      return false;
 
     // Open a GPRS context
     sendAT(GF("+UPSND=0,8"));
     if (waitResponse(GF(",8,1")) != 1) {
+      DBG("RETURN FALSE\n");
       return false;
     }
+
+    DBG("RETURN TRUE\n");
     return true;
   }
 
@@ -442,7 +550,8 @@ public:
   }
 
   String getLocalIP() {
-    sendAT(GF("+CIFSR;E0"));
+//    sendAT(GF("+CIFSR;E0"));
+    sendAT(GF("+UPSND=0,0"));
     String res;
     if (waitResponse(10000L, res) != 1) {
       return "";
@@ -513,12 +622,21 @@ public:
 protected:
 
   bool modemConnect(const char* host, uint16_t port, uint8_t* mux, bool ssl = false) {
+//    sendAT(GF("+CMEE=2"));
+//    waitResponse(5000L);
+
+    sendAT(GF("+USECMNG=3"));
+    waitResponse();
+
     sendAT(GF("+USOCR=6"));
     if (waitResponse(GF(GSM_NL "+USOCR:")) != 1) {
       return false;
     }
     *mux = stream.readStringUntil('\n').toInt();
     waitResponse();
+
+//    sendAT(GF("+USECPRF=1"));
+//    waitResponse(5000L);
 
     if (ssl) {
       sendAT(GF("+USOSEC="), *mux, ",1");
@@ -597,6 +715,7 @@ public:
 
   template<typename T>
   void streamWrite(T last) {
+    if(debugCallback) debugCallback(String(last));
     stream.print(last);
   }
 
@@ -638,11 +757,17 @@ public:
     int index = 0;
     unsigned long startMillis = millis();
     do {
-      TINY_GSM_YIELD();
+      if(callback) callback(10);
+      else TINY_GSM_YIELD();
       while (stream.available() > 0) {
         int a = stream.read();
         if (a < 0) continue;
         data += (char)a;
+        if(debugCallback) {
+          String chr = "";
+          chr += (char)a;
+          debugCallback(chr);
+        }
         if (r1 && data.endsWith(r1)) {
           index = 1;
           goto finish;
