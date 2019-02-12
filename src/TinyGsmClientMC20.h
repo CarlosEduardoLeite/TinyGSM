@@ -658,6 +658,106 @@ public:
   }
 
   /*
+   * Location functions
+   */
+
+  bool waitForGpsTimeSync(unsigned long timeout = 120000L) {
+    for (unsigned long start = millis(); millis() - start < timeout; ) {
+      if (gpsIsTimeSynched()) return true;
+      delay(250);
+    }
+    return false;
+  }
+
+  bool gpsIsOn() {
+    sendAT(GF("+QGNSSC?"));
+    waitResponse(GF(GSM_NL "+QGNSSC:"));
+    int mode = stream.readStringUntil('\n').toInt();
+    waitResponse();
+
+    return mode == 1;
+  }
+
+  bool gpsActivate() {
+    if (gpsIsOn()) return true;
+
+    sendAT(GF("+QGNSSC=1"));
+    return waitResponse() == 1 ? true : false;
+  }
+
+  bool gpsDeactivate() {
+    if (!gpsIsOn()) return true;
+
+    sendAT(GF("+QGNSSC=0"));
+    return waitResponse() == 1 ? true : false;
+  }
+
+  String getGpsData() {
+    sendAT(GF("+QGNSSRD?"));
+    if (waitResponse(GF(GSM_NL "+QGNSSRD:")) != 1) {
+      return "";
+    }
+
+    String res = stream.readStringUntil('\n');
+    for (int i = 0; i < 8; i++) {
+      res += "\r\n" + stream.readStringUntil('\n');
+    }
+
+    waitResponse();
+    res.trim();
+    return res;
+  }
+
+  bool gpsEnableEPO() {
+    if (!waitForNetwork()) return false;
+    if (!waitForGpsTimeSync()) return false;
+
+    sendAT(GF("+QGNSSEPO=1"));
+    if (waitResponse() != 1) return false;
+
+    return true;
+  }
+
+  bool gpsDisableEPO() {
+    sendAT(GF("+QGNSSEPO=0"));
+    if (waitResponse() != 1) return false;
+
+    return true;
+  }
+
+  bool gpsTriggerEPO() {
+    sendAT(GF("+QGEPOAID"));
+    if (waitResponse() != 1) return false;
+
+    return true;
+  }
+
+  bool gpsSetRefLocation(const char lat[], const char lng[]) {
+    sendAT(GF("+QGREFLOC="), GF(lat), ',', GF(lng));
+    if (waitResponse() != 1) return false;
+
+    return true;
+  }
+
+  bool gpsIsTimeSynched() {
+    sendAT(GF("+QGNSSTS?"));
+    if (waitResponse(GF(GSM_NL "+QGNSSTS:")) != 1) return false;
+
+    int status = stream.readStringUntil('\n').toInt();
+    waitResponse();
+
+    return status == 1;
+  }
+
+  bool gpsEnableEPE() {
+    sendAT(GF("+QGNSSCMD=0,$PQEPE,W,1,1*2A"));
+    if (waitResponse() != 1) return false;
+
+    return true;
+  }
+
+
+  /*
    * Messaging functions
    */
 
@@ -904,6 +1004,7 @@ public:
     int index = 0;
     unsigned long startMillis = millis();
     do {
+      if(callback) callback(10);
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
         int a = stream.read();
