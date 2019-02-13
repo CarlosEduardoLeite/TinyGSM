@@ -692,18 +692,40 @@ public:
     return waitResponse() == 1 ? true : false;
   }
 
+  bool startGpsDataRead() {
+    sendAT(GF("+QGNSSRD?"));
+    stream.readStringUntil(':');
+
+    return true;
+  }
+
+  String getGpsDataLine() {
+    String line = stream.readStringUntil('\n');
+    line.trim();
+    return line;
+  }
+
+  void getGpsDataEnd() {
+    waitResponse();
+  }
+
   String getGpsData() {
     sendAT(GF("+QGNSSRD?"));
+
     if (waitResponse(GF(GSM_NL "+QGNSSRD:")) != 1) {
       return "";
     }
 
-    String res = stream.readStringUntil('\n');
-    for (int i = 0; i < 8; i++) {
-      res += "\r\n" + stream.readStringUntil('\n');
-    }
+    String res = "";
+    do {
+      String line = stream.readStringUntil('\n');
+      line.trim();
+      if(line.length() == 0) break;
+      res += line + "\r\n";
+    } while(1);
 
     waitResponse();
+
     res.trim();
     return res;
   }
@@ -750,7 +772,7 @@ public:
   }
 
   bool gpsEnableEPE() {
-    sendAT(GF("+QGNSSCMD=0,$PQEPE,W,1,1*2A"));
+    sendAT(GF("+QGNSSCMD=0,\"$PQEPE,W,1,1*2A\""));
     if (waitResponse() != 1) return false;
 
     return true;
