@@ -243,6 +243,10 @@ public:
         continue;
       }
 
+//TODO CADU maintain deve atualizar o sock_connected?? o waitResponse atualiza... e o maintain chama waitResponse
+//          o maintain chama modemGetAvailable (para nao SSL) que tambem deveria atualizar corretamente o status
+//TODO CADU break se socket nao estiver conectado e rx vazio
+//TODO CADU timeout
       if (!rx.size() && sock_connected) {
         at->maintain();
         //break;
@@ -275,6 +279,7 @@ public:
 //============================================================================//
 
 public:
+  String pqepe;
 
   void (*callback)(unsigned long);
   void setCallback(void (*cb)(unsigned long)) {
@@ -295,6 +300,7 @@ public:
   {
     callback = 0;
     debugCallback = 0;
+    pqepe = "";
     memset(sockets, 0, sizeof(sockets));
   }
 
@@ -520,10 +526,6 @@ public:
     return res;
   }
 
-  bool updateClock() {
-    return true;
-  }
-
   /*
    * Generic network functions
    */
@@ -694,9 +696,11 @@ public:
 
   bool startGpsDataRead() {
     sendAT(GF("+QGNSSRD?"));
-    stream.readStringUntil(':');
-
     return true;
+  }
+
+  bool waitGpsData() {
+    return streamSkipUntil(':');
   }
 
   String getGpsDataLine() {
@@ -916,6 +920,9 @@ protected:
     size_t len = stream.readStringUntil('\n').toInt();
 
     for (size_t i=0; i<len; i++) {
+//TODO CADU chamar o callback nesse loop.
+//TODO CADU verificar timeout nesse loop
+//TODO CADU ter variavel pra contar quantos bytes foram lidos
       while (!stream.available()) { TINY_GSM_YIELD(); }
       char c = stream.read();
       sockets[mux]->rx.put(c);
@@ -924,6 +931,7 @@ protected:
     waitResponse();
     
     // DBG("### READ:", mux, ",", len);
+//TODO CADU retornar variavel com a quantidade de bytes realmente lida
     return len;
   }
 
@@ -931,6 +939,8 @@ protected:
     size_t result = 0;
     if (ssl) {
       // QSSLRECV=<cid>,<ssid>,<length>
+//TODO CADU retornar tamanho do rx?
+//TODO CADU verificar se esta connected
       return modemRead(1500, mux, true); // We need to read eagerly, since we don't have a way to determine how much data there is
     } else {
       sendAT(GF("+QIRD="), 0, ',', 1, ',', mux, ',', 0);
@@ -950,6 +960,7 @@ protected:
     return result;
   }
 
+//TODO CADU verificar se o comando realemten é QSSLSTATE para sockets NAO SSL
   bool modemGetConnected(uint8_t mux) {
     sendAT(GF("+QSSLSTATE"));
 
@@ -963,14 +974,13 @@ protected:
     streamSkipUntil(','); // Skip remote ip
     streamSkipUntil(','); // Skip remote port
     String res = stream.readStringUntil(','); // socket state
+
+    bool result = (res == "CONNECTED");
     streamSkipUntil('\n');
 
     waitResponse();
 
-    char resChar[res.length()+1];
-    strcpy(resChar, res.c_str());
-    // 0 Initial, 1 Opening, 2 Connected, 3 Listening, 4 Closing
-    return strcmp(resChar, "CONNECTED");
+    return result;
   }
 
 public:
@@ -1052,6 +1062,8 @@ public:
         } else if (r5 && data.endsWith(r5)) {
           index = 5;
           goto finish;
+        } else if (data.endsWith(GF(GSM_NL "+QGNSSCMD: $PQEPE,"))) {
+          pqepe = "$PQEPE," + stream.readStringUntil('\n');
         } else if (data.endsWith(GF(GSM_NL "+QIURC:"))) {
           stream.readStringUntil('\"');
           String urc = stream.readStringUntil('\"');
