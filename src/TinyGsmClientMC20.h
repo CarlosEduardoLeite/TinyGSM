@@ -304,6 +304,29 @@ public:
     memset(sockets, 0, sizeof(sockets));
   }
 
+  bool waitString(String str, unsigned long timeout) {
+    String buf("");
+    unsigned long startTime = millis();
+    unsigned long ellapsedTime = 0;
+
+    while (ellapsedTime < timeout) {
+        int chr = stream.read();
+
+        if (chr >= 0) {
+          buf += (char) chr;
+          if (buf.length() > str.length()) {
+            buf = buf.substring(1);
+          }
+          if (buf.equalsIgnoreCase(str)) return true;
+        }
+
+        unsigned long now = millis();
+        ellapsedTime = (now >= startTime) ? now - startTime : now;
+    }
+
+    return false;
+  }
+
   /*
    * Basic functions
    */
@@ -332,6 +355,13 @@ public:
     if (waitResponse() != 1) return false;
 
     sendAT(GF("+QINDI=1"));
+    if (waitResponse() != 1) return false;
+
+//Time Sync Setup
+    sendAT(GF("+QNITZ=1"));
+    if (waitResponse() != 1) return false;
+
+    sendAT(GF("+CTZU=2"));
     if (waitResponse() != 1) return false;
 
     return true;
@@ -401,7 +431,7 @@ public:
    * Power functions
    */
 
-  bool restart() {
+  bool restart(unsigned long baudRate = 0) {
     if (!testAT()) {
       //TINY_GSM_DEBUG.println("Modem seems to be off. Turn on and try again.");
       return false;
@@ -418,7 +448,7 @@ public:
 //    }
     if(callback) callback(3000);
     else delay(3000);
-    return init();
+    return init(baudRate);
   }
 
   bool poweroff(bool emergency = true) {
@@ -700,7 +730,7 @@ public:
   }
 
   bool waitGpsData() {
-    return streamSkipUntil(':');
+    return waitString("QGNSSRD:", 1000);
   }
 
   String getGpsDataLine() {
@@ -782,6 +812,107 @@ public:
     return true;
   }
 
+  /*
+   * Filesystem functions
+   */
+
+  bool deleteFile(String fileName) {
+    sendAT(GF("+QFDEL=\""), GF(fileName), GF("\""));
+    if (waitResponse(5000) != 1) return false;
+
+    return true;
+  }
+
+  bool uploadFile(String fileName, char *data, uint16_t fileSize) {
+    sendAT(GF("+QFUPL=\""), GF(fileName), GF("\","), fileSize + 2);
+    if (waitResponse(5000, GF(GSM_NL "CONNECT")) != 1) return false;
+
+    stream.write((uint8_t *)&fileSize, 2);
+    stream.write(data, fileSize);
+    stream.flush();
+
+    if (waitResponse(5000, GF(GSM_NL "+QFUPL:")) != 1) return false;
+    if (waitResponse() != 1) return false;
+
+    return true;
+  }
+
+  bool waitConnect() {
+    #define CONNECT_TMP_BUF_SZ 12
+    char tmpBuf[CONNECT_TMP_BUF_SZ + 1];
+
+    memset(tmpBuf, 0, CONNECT_TMP_BUF_SZ + 1);
+    unsigned long startTime = millis();
+    unsigned long ellapsedTime = 0;
+
+    while (ellapsedTime < 1000) {
+        int chr = stream.read();
+        if (chr >= 0) {
+          for (int i=0; i<CONNECT_TMP_BUF_SZ; i++) tmpBuf[i] = tmpBuf[i+1];
+          tmpBuf[CONNECT_TMP_BUF_SZ - 1] = chr;
+        }
+        String str(tmpBuf);
+        if (str.endsWith("CONNECT" GSM_NL)) return true;
+
+        unsigned long now = millis();
+        ellapsedTime = (now >= startTime) ? now - startTime : now;
+    }
+
+    return false;
+  }
+
+  int32_t downloadFile(String fileName, char *buf, uint16_t bufSz) {
+    uint16_t fileSize = 0;
+    int32_t rdLen = 0;
+    int32_t errorCode = 0;
+
+    sendAT(GF("+QFDWL=\""), GF(fileName), GF("\""));
+
+    if (!waitString("CONNECT" GSM_NL, 1000)) {
+      errorCode = -1;
+      goto ERR;
+    }
+//    if (waitResponse(1500, GF("CONNECT" GSM_NL)) != 1) {errorCode = -1; goto ERR;};
+    if (stream.readBytes((uint8_t*)&fileSize, 2) != 2) {errorCode = -2; goto ERR;};
+
+    while (rdLen < fileSize) {
+      #define FILE_TMP_BUF_SZ 128
+      char tmpBuf[FILE_TMP_BUF_SZ];
+      int32_t remain = fileSize - rdLen;
+      int32_t szToRead = (remain > FILE_TMP_BUF_SZ) ? FILE_TMP_BUF_SZ : remain;
+      int32_t szToStore = 0;
+
+      int32_t rd = stream.readBytes(tmpBuf, szToRead);
+      if (szToRead != rd) {
+        errorCode = -3;
+        goto ERR;
+      }
+
+      if (rdLen > bufSz) {
+        rdLen += rd;
+        continue;
+      }
+
+      rdLen += rd;
+      szToStore = (rdLen > bufSz) ? rdLen - bufSz : rd;
+      memcpy(buf, tmpBuf, szToStore);
+      buf += szToStore;
+    }
+
+
+    if (waitResponse(5000, GF(GSM_NL "+QFDWL:")) != 1) {
+      waitResponse();
+      return -4;
+    }
+    if (waitResponse() != 1) return -1;
+
+    return rdLen;
+
+  ERR:
+    waitResponse(5000, GF(GSM_NL "+QFDWL:"));
+    waitResponse();
+    return errorCode;
+  }
 
   /*
    * Messaging functions
@@ -1003,12 +1134,17 @@ public:
   bool streamSkipUntil(char c) {
     const unsigned long timeout = 1000L;
     unsigned long startMillis = millis();
-    while (millis() - startMillis < timeout) {
-      while (millis() - startMillis < timeout && !stream.available()) {
+    unsigned long ellapsed = 0;
+    while (ellapsed < timeout) {
+      while ((ellapsed < timeout) && !stream.available()) {
         TINY_GSM_YIELD();
+        unsigned long now = millis();
+        ellapsed = (now >= startMillis) ? now - startMillis : now;
       }
       if (stream.read() == c)
         return true;
+      unsigned long now = millis();
+      ellapsed = (now >= startMillis) ? now - startMillis : now;
     }
     return false;
   }
@@ -1035,8 +1171,9 @@ public:
     data.reserve(64);
     int index = 0;
     unsigned long startMillis = millis();
+    unsigned long ellapsedTime = 0;
+    long currentCall = 0;
     do {
-      if(callback) callback(10);
       TINY_GSM_YIELD();
       while (stream.available() > 0) {
         int a = stream.read();
@@ -1062,7 +1199,7 @@ public:
         } else if (r5 && data.endsWith(r5)) {
           index = 5;
           goto finish;
-        } else if (data.endsWith(GF(GSM_NL "+QGNSSCMD: $PQEPE,"))) {
+        } else if (data.endsWith(GF("+QGNSSCMD: $PQEPE,"))) {
           pqepe = "$PQEPE," + stream.readStringUntil('\n');
         } else if (data.endsWith(GF(GSM_NL "+QIURC:"))) {
           stream.readStringUntil('\"');
@@ -1119,7 +1256,15 @@ public:
           data = "";
         }
       }
-    } while (millis() - startMillis < timeout);
+      unsigned long now = millis();
+      ellapsedTime = (now >= startMillis) ? now - startMillis : now;
+
+      long call = ellapsedTime / 300;
+      if (call != currentCall) {
+        currentCall = call;
+        if(callback) callback(10);
+      }
+    } while (ellapsedTime < timeout);
 finish:
     if (!index) {
       data.trim();
